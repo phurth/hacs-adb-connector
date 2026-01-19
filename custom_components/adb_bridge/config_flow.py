@@ -146,29 +146,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize."""
         self._discovered_devices: list[dict[str, str]] = []
-        self._connection_type: str = CONNECTION_USB
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle connection type selection."""
-        if user_input is not None:
-            self._connection_type = user_input[CONF_CONNECTION_TYPE]
-            
-            if self._connection_type == CONNECTION_USB:
-                return await self.async_step_usb()
-            else:
-                return await self.async_step_wifi()
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_CONNECTION_TYPE, default=CONNECTION_USB): vol.In({
-                    CONNECTION_USB: "USB (device plugged in)",
-                    CONNECTION_WIFI: "WiFi (device already in wireless ADB mode)",
-                }),
-            }),
-        )
+        """Handle USB device selection."""
+        return await self.async_step_usb(user_input)
 
     async def async_step_usb(
         self, user_input: dict[str, Any] | None = None
@@ -182,7 +165,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Test connection
             if await _test_usb_connection(self.hass, serial):
                 return self.async_create_entry(
-                    title=f"ADB Bridge ({serial or 'USB'})",
+                    title=f"ADB Device ({serial or 'USB'})",
                     data={
                         CONF_CONNECTION_TYPE: CONNECTION_USB,
                         CONF_DEVICE_SERIAL: serial,
@@ -213,38 +196,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "device_count": str(len(self._discovered_devices)),
             },
         )
-
-    async def async_step_wifi(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle WiFi connection setup."""
-        errors = {}
-        
-        if user_input is not None:
-            ip = user_input[CONF_DEVICE_IP]
-            port = user_input.get(CONF_ADB_PORT, DEFAULT_ADB_PORT)
-            
-            if await _test_wifi_connection(self.hass, ip, port):
-                return self.async_create_entry(
-                    title=f"ADB Bridge ({ip})",
-                    data={
-                        CONF_CONNECTION_TYPE: CONNECTION_WIFI,
-                        CONF_DEVICE_IP: ip,
-                        CONF_ADB_PORT: port,
-                    },
-                )
-            else:
-                errors["base"] = "cannot_connect"
-
-        return self.async_show_form(
-            step_id="wifi",
-            data_schema=vol.Schema({
-                vol.Required(CONF_DEVICE_IP): str,
-                vol.Optional(CONF_ADB_PORT, default=DEFAULT_ADB_PORT): int,
-            }),
-            errors=errors,
-        )
-
 
 class CannotConnect(HomeAssistantError):
     """Error to indicate we cannot connect."""
