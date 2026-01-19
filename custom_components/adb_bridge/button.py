@@ -84,5 +84,16 @@ class ReconnectButton(CoordinatorEntity[AdbBridgeCoordinator], ButtonEntity):
 
     async def async_press(self) -> None:
         """Handle button press."""
+        # Only disconnect if connection is broken
+        if self.coordinator._device:
+            try:
+                # Test if connection works
+                await self.coordinator.async_run_command("echo test")
+                # Connection is fine, no need to reconnect
+                return
+            except Exception:
+                # Connection is broken, proceed with reconnect
+                pass
+        
         await self.coordinator.async_disconnect()
         await self.coordinator.async_request_refresh()

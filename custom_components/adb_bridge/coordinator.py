@@ -76,6 +76,16 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         def _connect():
             try:
+                # Don't reconnect if already connected and working
+                if self._device and self._device.available:
+                    try:
+                        # Test the connection
+                        self._device.shell("echo test")
+                        return True
+                    except Exception:
+                        # Connection is stale, reconnect
+                        pass
+                
                 if self.connection_type == CONNECTION_USB:
                     from adb_shell.adb_device import AdbDeviceUsb
                     if self.device_serial:
@@ -110,7 +120,8 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from device."""
         async with self._lock:
-            if self._device is None or not self._device.available:
+            # Don't try to reconnect if we're not supposed to be connected
+            if self._device is None:
                 if not await self._async_connect():
                     raise UpdateFailed("Could not connect to device")
             
@@ -124,7 +135,16 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
                 
                 try:
+                    # Test if connection is still alive
                     if not self._device or not self._device.available:
+                        return data
+                    
+                    # Quick test
+                    try:
+                        self._device.shell("echo test")
+                    except Exception:
+                        # Connection is dead
+                        self._device = None
                         return data
                     
                     data["connected"] = True
