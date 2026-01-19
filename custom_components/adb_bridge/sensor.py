@@ -23,6 +23,7 @@ async def async_setup_entry(
         AdbConnectionSensor(coordinator, entry),
         AdbWifiIpSensor(coordinator, entry),
         AdbPortSensor(coordinator, entry),
+        AdbWirelessStateSensor(coordinator, entry),
     ])
 
 
@@ -135,3 +136,40 @@ class AdbPortSensor(CoordinatorEntity[AdbBridgeCoordinator], SensorEntity):
                 "connect_command": f"adb connect {ip}:{port}",
             }
         return {}
+
+
+class AdbWirelessStateSensor(CoordinatorEntity[AdbBridgeCoordinator], SensorEntity):
+    """Sensor showing wireless ADB enabled/disabled state."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Wireless ADB"
+    _attr_icon = "mdi:wifi-check"
+
+    def __init__(
+        self,
+        coordinator: AdbBridgeCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_wireless_adb"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": f"ADB Bridge ({coordinator.device_serial or coordinator.device_ip or 'Device'})",
+            "manufacturer": "Android",
+            "model": "ADB Device",
+        }
+
+    @property
+    def native_value(self) -> str:
+        """Return wireless ADB state."""
+        if self.coordinator.data and self.coordinator.data.get("wifi_adb_enabled"):
+            return "Enabled"
+        return "Disabled"
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on state."""
+        if self.coordinator.data and self.coordinator.data.get("wifi_adb_enabled"):
+            return "mdi:wifi-check"
+        return "mdi:wifi-off"
