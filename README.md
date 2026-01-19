@@ -31,26 +31,19 @@ Home Assistant integration for managing USB and wireless ADB connections to Andr
 
 ## Configuration
 
-1. Go to **Settings** → **Devices & Services**
-2. Click **"+ Add Integration"**
-3. Search for **"ADB Bridge"**
-4. Choose connection type:
-   - **USB**: For devices physically connected via USB
-   - **WiFi**: For devices already in wireless ADB mode
+1. **Connect device via USB** to your Home Assistant host
+2. Go to **Settings** → **Devices & Services**
+3. Click **"+ Add Integration"**
+4. Search for **"ADB Bridge"**
+5. Select your device from the list
+6. **Watch your device screen** for the "Allow USB debugging?" prompt
+7. Check "Always allow from this computer" and tap "OK"
 
-### USB Connection
+### Requirements
 
-When connecting via USB:
-1. Ensure USB debugging is enabled on the Android device
-2. Watch your device screen for the "Allow USB debugging?" prompt
-3. Check "Always allow from this computer" and tap "OK"
-
-### WiFi Connection
-
-For WiFi connections:
-1. Device must already be in wireless ADB mode (tcpip)
-2. Enter the device's IP address
-3. Default port is 5555
+- USB debugging enabled on Android device
+- USB cable connected to Home Assistant host
+- Device appears in `/dev/bus/usb/` (automatic with Proxmox USB passthrough or bare metal)
 
 ## Entities
 
