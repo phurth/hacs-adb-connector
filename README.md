@@ -13,6 +13,8 @@ Home Assistant integration for managing USB and wireless ADB connections to Andr
 
 ## Installation
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=phurth&repository=hacs-adb-connector&category=integration)
+
 ### HACS (Recommended)
 
 1. Open HACS in Home Assistant
