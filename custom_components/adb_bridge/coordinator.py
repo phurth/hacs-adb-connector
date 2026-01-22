@@ -86,19 +86,27 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         return True
                     except Exception:
                         # Connection is stale, reconnect
-                        pass
+                        _LOGGER.debug("Existing connection stale, reconnecting...")
+                        try:
+                            self._device.close()
+                        except Exception:
+                            pass
+                        self._device = None
                 
                 if self.connection_type == CONNECTION_USB:
                     from adb_shell.adb_device import AdbDeviceUsb
+                    _LOGGER.debug("Connecting via USB (serial=%s)", self.device_serial)
                     if self.device_serial:
                         self._device = AdbDeviceUsb(serial=self.device_serial)
                     else:
                         self._device = AdbDeviceUsb()
                 else:
                     from adb_shell.adb_device import AdbDeviceTcp
+                    _LOGGER.debug("Connecting via TCP to %s:%s", self.device_ip, self.adb_port)
                     self._device = AdbDeviceTcp(self.device_ip, self.adb_port)
                 
                 self._device.connect(rsa_keys=[self._signer], auth_timeout_s=30)
+                _LOGGER.info("ADB connected successfully (available=%s)", self._device.available)
                 return self._device.available
             except Exception as e:
                 _LOGGER.error("Connection failed: %s", e)
