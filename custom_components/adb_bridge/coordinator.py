@@ -95,6 +95,18 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 
                 if self.connection_type == CONNECTION_USB:
                     from adb_shell.adb_device import AdbDeviceUsb
+                    import usb.core
+                    
+                    # Debug: enumerate what USB devices we can see
+                    try:
+                        all_usb = list(usb.core.find(find_all=True))
+                        android_devs = [d for d in all_usb if d.idVendor == 0x18d1]
+                        _LOGGER.info("USB scan: %d total devices, %d Google/Android devices", len(all_usb), len(android_devs))
+                        for d in android_devs:
+                            _LOGGER.info("  Found: %04x:%04x serial=%s", d.idVendor, d.idProduct, getattr(d, 'serial_number', 'N/A'))
+                    except Exception as e:
+                        _LOGGER.warning("USB enumeration failed: %s", e)
+                    
                     _LOGGER.debug("Connecting via USB (serial=%s)", self.device_serial)
                     if self.device_serial:
                         self._device = AdbDeviceUsb(serial=self.device_serial)
