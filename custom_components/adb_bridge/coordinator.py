@@ -148,6 +148,7 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if not await self._async_connect():
                     # If USB isn't available, still try to validate WiFi ADB based on last-known info
                     def _wifi_probe_from_cache():
+                        import socket
                         data = {
                             "connected": False,
                             "serial": None,
@@ -158,16 +159,13 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if not self._last_wifi_ip or not self._last_wifi_port:
                             return data
                         try:
-                            from adb_shell.adb_device import AdbDeviceTcp
-                            test_dev = AdbDeviceTcp(self._last_wifi_ip, self._last_wifi_port)
-                            test_dev.connect(rsa_keys=[self._signer] if self._signer else None, auth_timeout_s=5)
-                            data["wifi_adb_enabled"] = bool(getattr(test_dev, "available", False))
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(2)
+                            result = sock.connect_ex((self._last_wifi_ip, self._last_wifi_port))
+                            sock.close()
+                            data["wifi_adb_enabled"] = (result == 0)
                         except Exception:
                             data["wifi_adb_enabled"] = False
-                        try:
-                            test_dev.close()  # type: ignore[name-defined]
-                        except Exception:
-                            pass
                         return data
 
                     return await self.hass.async_add_executor_job(_wifi_probe_from_cache)
@@ -220,24 +218,24 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         pass
                     
-                    # Check if WiFi ADB is enabled by attempting actual TCP connection
-                    # This is the only reliable way - properties can be stale/wrong
+                    # Check if WiFi ADB is enabled by checking if port is listening
+                    # We use a simple socket connect instead of full ADB handshake
+                    # because ADB might reject a second connection while USB is active
                     port_to_check = self._last_wifi_port or 5555
                     data["adb_port"] = port_to_check
                     
                     if data.get("wifi_ip"):
+                        import socket
                         try:
-                            from adb_shell.adb_device import AdbDeviceTcp
-                            test_dev = AdbDeviceTcp(data["wifi_ip"], port_to_check)
-                            test_dev.connect(rsa_keys=[self._signer], auth_timeout_s=3)
-                            data["wifi_adb_enabled"] = bool(test_dev.available)
-                            _LOGGER.debug("WiFi ADB check: %s:%s = %s", data["wifi_ip"], port_to_check, data["wifi_adb_enabled"])
-                            try:
-                                test_dev.close()
-                            except Exception:
-                                pass
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(2)
+                            result = sock.connect_ex((data["wifi_ip"], port_to_check))
+                            sock.close()
+                            data["wifi_adb_enabled"] = (result == 0)
+                            _LOGGER.debug("WiFi ADB port check: %s:%s = %s (result=%s)", 
+                                         data["wifi_ip"], port_to_check, data["wifi_adb_enabled"], result)
                         except Exception as e:
-                            _LOGGER.debug("WiFi ADB not available at %s:%s - %s", data["wifi_ip"], port_to_check, e)
+                            _LOGGER.debug("WiFi ADB port check failed: %s:%s - %s", data["wifi_ip"], port_to_check, e)
                             data["wifi_adb_enabled"] = False
                     
                     return data
