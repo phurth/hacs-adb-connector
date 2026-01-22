@@ -42,6 +42,8 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device = None
         self._signer = None
         self._lock = asyncio.Lock()
+        self._last_wifi_ip: str | None = None
+        self._last_wifi_port: int = DEFAULT_ADB_PORT
         
         self.connection_type = entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_USB)
         self.device_serial = entry.data.get(CONF_DEVICE_SERIAL)
@@ -122,8 +124,33 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self._lock:
             # Don't try to reconnect if we're not supposed to be connected
             if self._device is None:
+                # Attempt connection over configured transport
                 if not await self._async_connect():
-                    raise UpdateFailed("Could not connect to device")
+                    # If USB isn't available, still try to validate WiFi ADB based on last-known info
+                    def _wifi_probe_from_cache():
+                        data = {
+                            "connected": False,
+                            "serial": None,
+                            "wifi_ip": self._last_wifi_ip,
+                            "wifi_adb_enabled": False,
+                            "adb_port": self._last_wifi_port,
+                        }
+                        if not self._last_wifi_ip or not self._last_wifi_port:
+                            return data
+                        try:
+                            from adb_shell.adb_device import AdbDeviceTcp
+                            test_dev = AdbDeviceTcp(self._last_wifi_ip, self._last_wifi_port)
+                            test_dev.connect(rsa_keys=[self._signer] if self._signer else None, auth_timeout_s=5)
+                            data["wifi_adb_enabled"] = bool(getattr(test_dev, "available", False))
+                        except Exception:
+                            data["wifi_adb_enabled"] = False
+                        try:
+                            test_dev.close()  # type: ignore[name-defined]
+                        except Exception:
+                            pass
+                        return data
+
+                    return await self.hass.async_add_executor_job(_wifi_probe_from_cache)
             
             def _get_data():
                 data = {
@@ -160,7 +187,9 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     try:
                         result = self._device.shell("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
                         if result and result.strip():
-                            data["wifi_ip"] = result.strip()
+                            ip_val = result.strip()
+                            data["wifi_ip"] = ip_val
+                            self._last_wifi_ip = ip_val
                     except Exception:
                         pass
                     
@@ -181,6 +210,7 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 port_val = 5555
                         if port_val:
                             data["adb_port"] = port_val
+                            self._last_wifi_port = port_val
 
                         # Only claim enabled when TCP connection succeeds
                         if data.get("wifi_ip") and port_val:
@@ -249,7 +279,31 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         except Exception as e2:
                             _LOGGER.error("Error enabling WiFi ADB (fallback failed): %s", e2)
                             # Even if restart failed, return captured IP if we have it so user can manually act
+                            # Update cache for UI hints
+                            if ip:
+                                self._last_wifi_ip = ip
+                                self._last_wifi_port = port
                             return ip
+
+                    # Update cache for UI hints
+                    if ip:
+                        self._last_wifi_ip = ip
+                        self._last_wifi_port = port
+
+                    # Optionally verify WiFi ADB is up; ignore failures here to avoid blocking button UX
+                    try:
+                        if ip:
+                            from adb_shell.adb_device import AdbDeviceTcp
+                            test_dev = AdbDeviceTcp(ip, port)
+                            test_dev.connect(rsa_keys=[self._signer] if self._signer else None, auth_timeout_s=5)
+                            if getattr(test_dev, "available", False):
+                                _LOGGER.info("WiFi ADB verified at %s:%s", ip, port)
+                            try:
+                                test_dev.close()
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        _LOGGER.debug("WiFi ADB verification failed post-enable: %s", e)
 
                     return ip
                 except Exception as e:
