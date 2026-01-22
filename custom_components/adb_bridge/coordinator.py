@@ -190,43 +190,35 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             ip_val = result.strip()
                             data["wifi_ip"] = ip_val
                             self._last_wifi_ip = ip_val
+                        else:
+                            # Try eth0 as fallback
+                            result = self._device.shell("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+                            if result and result.strip():
+                                ip_val = result.strip()
+                                data["wifi_ip"] = ip_val
+                                self._last_wifi_ip = ip_val
                     except Exception:
                         pass
                     
-                    # Check if WiFi ADB is enabled: validate actual TCP listener via quick connect
-                    try:
-                        port_val: int | None = None
-                        # Prefer runtime service property
-                        result = self._device.shell("getprop service.adb.tcp.port")
-                        prop_val = result.strip() if result else ""
-                        if not prop_val or prop_val in ("0", "-1"):
-                            # Fallback to persisted property used on some devices
-                            result = self._device.shell("getprop persist.adb.tcp.port")
-                            prop_val = result.strip() if result else ""
-                        if prop_val and prop_val not in ("0", "-1"):
-                            try:
-                                port_val = int(prop_val)
-                            except Exception:
-                                port_val = 5555
-                        if port_val:
-                            data["adb_port"] = port_val
-                            self._last_wifi_port = port_val
-
-                        # Only claim enabled when TCP connection succeeds
-                        if data.get("wifi_ip") and port_val:
+                    # Check if WiFi ADB is enabled by attempting actual TCP connection
+                    # This is the only reliable way - properties can be stale/wrong
+                    port_to_check = self._last_wifi_port or 5555
+                    data["adb_port"] = port_to_check
+                    
+                    if data.get("wifi_ip"):
+                        try:
                             from adb_shell.adb_device import AdbDeviceTcp
-                            try:
-                                test_dev = AdbDeviceTcp(data["wifi_ip"], port_val)
-                                test_dev.connect(rsa_keys=[self._signer], auth_timeout_s=5)
-                                data["wifi_adb_enabled"] = bool(test_dev.available)
-                            except Exception:
-                                data["wifi_adb_enabled"] = False
+                            test_dev = AdbDeviceTcp(data["wifi_ip"], port_to_check)
+                            test_dev.connect(rsa_keys=[self._signer], auth_timeout_s=3)
+                            data["wifi_adb_enabled"] = bool(test_dev.available)
+                            _LOGGER.debug("WiFi ADB check: %s:%s = %s", data["wifi_ip"], port_to_check, data["wifi_adb_enabled"])
                             try:
                                 test_dev.close()
                             except Exception:
                                 pass
-                    except Exception:
-                        pass
+                        except Exception as e:
+                            _LOGGER.debug("WiFi ADB not available at %s:%s - %s", data["wifi_ip"], port_to_check, e)
+                            data["wifi_adb_enabled"] = False
                     
                     return data
                 except Exception as e:
@@ -240,70 +232,57 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise UpdateFailed(f"Error communicating with device: {e}")
 
     async def async_enable_wifi_adb(self, port: int = 5555) -> str | None:
-        """Enable WiFi ADB on the device. Returns device IP if successful."""
+        """Enable WiFi ADB on the device. Returns device IP if successful.
+        
+        Uses the ADB protocol's tcpip service (equivalent to `adb tcpip <port>`)
+        which works without root, unlike shell-based setprop approaches.
+        """
         async with self._lock:
             if self._device is None or not self._device.available:
                 if not await self._async_connect():
+                    _LOGGER.error("Cannot enable WiFi ADB: device not connected")
                     return None
             
             def _enable():
                 try:
-                    # Capture IP before restarting adbd
+                    # Capture IP before sending tcpip command (adbd will restart)
                     ip = None
-                    result = self._device.shell("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
-                    if result and result.strip():
-                        ip = result.strip()
-                    else:
-                        # Try eth0 as a fallback
-                        result = self._device.shell("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+                    try:
+                        result = self._device.shell("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
                         if result and result.strip():
                             ip = result.strip()
-
-                    # Attempt to switch ADB to TCP/IP mode and restart adbd in a single shell
-                    # Using ctl.restart avoids the problem where a second shell call can't run after stop
-                    # Some devices may not allow setting persist.*; best-effort only
-                    cmd = (
-                        f"setprop service.adb.tcp.port {port}; "
-                        f"setprop persist.adb.tcp.port {port}; "
-                        f"setprop ctl.restart adbd"
-                    )
-                    try:
-                        self._device.shell(cmd)
+                        else:
+                            result = self._device.shell("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+                            if result and result.strip():
+                                ip = result.strip()
                     except Exception as e:
-                        _LOGGER.warning("Primary restart path failed, trying fallback: %s", e)
-                        # Fallback: try stop/start in the same shell invocation (may still succeed on some builds)
+                        _LOGGER.warning("Could not get device IP: %s", e)
+
+                    _LOGGER.info("Enabling WiFi ADB on port %s (device IP: %s)", port, ip)
+
+                    # Use the ADB protocol tcpip service - this is what `adb tcpip <port>` does
+                    # It tells adbd to restart listening on the specified TCP port
+                    # This works WITHOUT root, unlike setprop approaches
+                    try:
+                        # _service() is the internal method used by reboot() etc.
+                        response = self._device._service(b'tcpip', str(port).encode('utf-8'), timeout_s=10)
+                        _LOGGER.info("tcpip service response: %s", response)
+                    except Exception as e:
+                        _LOGGER.warning("ADB tcpip service failed: %s - trying shell fallback", e)
+                        # Fallback for older devices or unusual configurations
                         try:
                             self._device.shell(
-                                f"setprop service.adb.tcp.port {port}; stop adbd; start adbd"
+                                f"setprop service.adb.tcp.port {port}; "
+                                f"setprop persist.adb.tcp.port {port}; "
+                                f"stop adbd; start adbd"
                             )
                         except Exception as e2:
-                            _LOGGER.error("Error enabling WiFi ADB (fallback failed): %s", e2)
-                            # Even if restart failed, return captured IP if we have it so user can manually act
-                            # Update cache for UI hints
-                            if ip:
-                                self._last_wifi_ip = ip
-                                self._last_wifi_port = port
-                            return ip
+                            _LOGGER.error("Shell fallback also failed: %s", e2)
 
-                    # Update cache for UI hints
+                    # Cache IP/port for state tracking
                     if ip:
                         self._last_wifi_ip = ip
                         self._last_wifi_port = port
-
-                    # Optionally verify WiFi ADB is up; ignore failures here to avoid blocking button UX
-                    try:
-                        if ip:
-                            from adb_shell.adb_device import AdbDeviceTcp
-                            test_dev = AdbDeviceTcp(ip, port)
-                            test_dev.connect(rsa_keys=[self._signer] if self._signer else None, auth_timeout_s=5)
-                            if getattr(test_dev, "available", False):
-                                _LOGGER.info("WiFi ADB verified at %s:%s", ip, port)
-                            try:
-                                test_dev.close()
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        _LOGGER.debug("WiFi ADB verification failed post-enable: %s", e)
 
                     return ip
                 except Exception as e:
