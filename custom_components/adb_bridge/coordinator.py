@@ -164,14 +164,21 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         pass
                     
-                    # Check if WiFi ADB is enabled (port 5555 listening)
+                    # Check if WiFi ADB is enabled
                     try:
+                        # Prefer runtime service property
                         result = self._device.shell("getprop service.adb.tcp.port")
-                        if result and result.strip():
-                            port = result.strip()
-                            if port != "0" and port != "-1":
-                                data["wifi_adb_enabled"] = True
-                                data["adb_port"] = int(port)
+                        prop_val = result.strip() if result else ""
+                        if not prop_val or prop_val in ("0", "-1"):
+                            # Fallback to persisted property used on some devices
+                            result = self._device.shell("getprop persist.adb.tcp.port")
+                            prop_val = result.strip() if result else ""
+                        if prop_val and prop_val not in ("0", "-1"):
+                            data["wifi_adb_enabled"] = True
+                            try:
+                                data["adb_port"] = int(prop_val)
+                            except Exception:
+                                data["adb_port"] = 5555
                     except Exception:
                         pass
                     
@@ -195,22 +202,40 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
             def _enable():
                 try:
-                    # Enable tcpip mode
-                    self._device.shell(f"setprop service.adb.tcp.port {port}")
-                    self._device.shell("stop adbd")
-                    self._device.shell("start adbd")
-                    
-                    # Get IP
+                    # Capture IP before restarting adbd
+                    ip = None
                     result = self._device.shell("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
                     if result and result.strip():
-                        return result.strip()
-                    
-                    # Try eth0
-                    result = self._device.shell("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
-                    if result and result.strip():
-                        return result.strip()
-                    
-                    return None
+                        ip = result.strip()
+                    else:
+                        # Try eth0 as a fallback
+                        result = self._device.shell("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+                        if result and result.strip():
+                            ip = result.strip()
+
+                    # Attempt to switch ADB to TCP/IP mode and restart adbd in a single shell
+                    # Using ctl.restart avoids the problem where a second shell call can't run after stop
+                    # Some devices may not allow setting persist.*; best-effort only
+                    cmd = (
+                        f"setprop service.adb.tcp.port {port}; "
+                        f"setprop persist.adb.tcp.port {port}; "
+                        f"setprop ctl.restart adbd"
+                    )
+                    try:
+                        self._device.shell(cmd)
+                    except Exception as e:
+                        _LOGGER.warning("Primary restart path failed, trying fallback: %s", e)
+                        # Fallback: try stop/start in the same shell invocation (may still succeed on some builds)
+                        try:
+                            self._device.shell(
+                                f"setprop service.adb.tcp.port {port}; stop adbd; start adbd"
+                            )
+                        except Exception as e2:
+                            _LOGGER.error("Error enabling WiFi ADB (fallback failed): %s", e2)
+                            # Even if restart failed, return captured IP if we have it so user can manually act
+                            return ip
+
+                    return ip
                 except Exception as e:
                     _LOGGER.error("Error enabling WiFi ADB: %s", e)
                     return None

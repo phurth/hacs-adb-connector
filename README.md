@@ -126,6 +126,11 @@ automation:
 - Verify device is on same network as Home Assistant
 - Check firewall isn't blocking port 5555
 - Some devices require WiFi to be enabled first (not Ethernet)
+- After pressing "Enable WiFi ADB", wait 2–5 seconds; the USB session will restart while `adbd` switches to TCP/IP
+- Confirm the `Wireless ADB` sensor shows `Enabled` and `ADB Port` shows `5555`
+- Try connecting from HA host: `adb connect <ip>:5555` and check `adb devices`
+- If your device blocks `ctl.restart` commands, unplug/replug USB and retry; alternatively reboot the device and press the button again
+- Certain OEM builds only honor `service.adb.tcp.port` after a restart; if so, reboot the device once after enabling
 
 ## Development
 
