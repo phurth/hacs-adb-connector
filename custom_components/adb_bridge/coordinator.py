@@ -164,8 +164,9 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         pass
                     
-                    # Check if WiFi ADB is enabled
+                    # Check if WiFi ADB is enabled: validate actual TCP listener via quick connect
                     try:
+                        port_val: int | None = None
                         # Prefer runtime service property
                         result = self._device.shell("getprop service.adb.tcp.port")
                         prop_val = result.strip() if result else ""
@@ -174,11 +175,26 @@ class AdbBridgeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             result = self._device.shell("getprop persist.adb.tcp.port")
                             prop_val = result.strip() if result else ""
                         if prop_val and prop_val not in ("0", "-1"):
-                            data["wifi_adb_enabled"] = True
                             try:
-                                data["adb_port"] = int(prop_val)
+                                port_val = int(prop_val)
                             except Exception:
-                                data["adb_port"] = 5555
+                                port_val = 5555
+                        if port_val:
+                            data["adb_port"] = port_val
+
+                        # Only claim enabled when TCP connection succeeds
+                        if data.get("wifi_ip") and port_val:
+                            from adb_shell.adb_device import AdbDeviceTcp
+                            try:
+                                test_dev = AdbDeviceTcp(data["wifi_ip"], port_val)
+                                test_dev.connect(rsa_keys=[self._signer], auth_timeout_s=5)
+                                data["wifi_adb_enabled"] = bool(test_dev.available)
+                            except Exception:
+                                data["wifi_adb_enabled"] = False
+                            try:
+                                test_dev.close()
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     
