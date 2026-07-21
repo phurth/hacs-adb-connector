@@ -5,3 +5,8 @@ __pycache__/
 .Python
 .vscode/
 .idea/
+
+# Internal notes & local secrets — never commit
+CLAUDE.md
+secrets.md
+.DS_Store
